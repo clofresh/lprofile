@@ -15,6 +15,7 @@ typedef struct scall {
   int caller_linedefined;
   const char *source;
   const char *name;
+  int line;
   int linedefined;
 } CALL;
 
@@ -33,9 +34,9 @@ static void callhook(lua_State *L, lua_Debug *ar) {
   int call_index;
   int call_stack_index;
 
-  lua_getinfo(L, "nS", ar);
 
   if (!ar->event) {
+    lua_getinfo(L, "nS", ar);
     /* Entering a function */
     CALL call;
 
@@ -45,11 +46,13 @@ static void callhook(lua_State *L, lua_Debug *ar) {
       call.caller_name = "(top)";
       call.caller_source = "(top)";
       call.caller_linedefined = -1;
+      call.line = -1;
     } else {
-      lua_getinfo(L, "nS", &previous_ar);
+      lua_getinfo(L, "nSl", &previous_ar);
       call.caller_name = previous_ar.name;
       call.caller_source = previous_ar.source;
       call.caller_linedefined = previous_ar.linedefined;
+      call.line = previous_ar.currentline;
     }
 
     /* Populate the call info */
@@ -136,7 +139,7 @@ static int profiler_start(lua_State *L) {
 
 static int profiler_stop(lua_State *L) {
   CALL *call;
-  float duration;
+  int duration;
 
   /* Deregister the callhook */
   lua_sethook(L, (lua_Hook)callhook, 0, 0);
@@ -145,20 +148,25 @@ static int profiler_stop(lua_State *L) {
   free(call_stack);
 
   /* Output the calls */
+  fprintf(f, "events: Time\n\n");
   for (int i = 0; i < num_calls; i ++) {
     call = &calls[i];
     if (call->end_time) {
-      duration = ((float)(call->end_time - call->start_time)) / ((float) CLOCKS_PER_SEC);
+      duration = (int)(call->end_time - call->start_time);
     } else {
-      duration = -1.0;
+      duration = 0;
     }
-    fprintf(f, "%s.%s(%d) -> %s.%s(%d): %f\n",
+
+    fprintf(f, "fl=%s\nfn=%s\n%d %d\ncfi=%s\ncfn=%s\ncalls=%d %d\n%d %d\n\n",
       call->caller_source,
       call->caller_name,
-      call->caller_linedefined,
+      call->line,
+      0, /* exclusive duration */
       call->source,
       call->name,
+      1, /* number of times called */
       call->linedefined,
+      call->line,
       duration);
   }
   free(calls);

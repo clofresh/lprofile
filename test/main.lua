@@ -19,7 +19,7 @@ end
 
 function love.load()
     print('starting')
-    LProfile.start()
+    LProfile.start('callgrind.1')
     print('started')
     a()
     print('stopping')

@@ -18,6 +18,7 @@ typedef struct scall {
   int linedefined;
 } CALL;
 
+FILE* f;
 CALL* calls;
 CALL* calls_tmp;
 int num_calls;
@@ -103,6 +104,22 @@ static void callhook(lua_State *L, lua_Debug *ar) {
 
 static int profiler_start(lua_State *L) {
   /* Initialize the profiler state */
+
+
+  const char* outfile;
+  if(lua_gettop(L) >= 1) {
+    outfile = luaL_checkstring(L, 1);
+  } else {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+
+  f = fopen(outfile, "w");
+  if (f == NULL) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+
   size_calls = 10000;
   calls = malloc(size_calls * sizeof(CALL));
   size_call_stack = size_calls;
@@ -113,6 +130,7 @@ static int profiler_start(lua_State *L) {
 
   /* Return success */
   lua_pushboolean(L, 1);
+
   return 1;
 }
 
@@ -134,7 +152,7 @@ static int profiler_stop(lua_State *L) {
     } else {
       duration = -1.0;
     }
-    fprintf(stderr, "%s.%s(%d) -> %s.%s(%d): %f\n",
+    fprintf(f, "%s.%s(%d) -> %s.%s(%d): %f\n",
       call->caller_source,
       call->caller_name,
       call->caller_linedefined,
@@ -145,6 +163,7 @@ static int profiler_stop(lua_State *L) {
   }
   free(calls);
 
+  fclose(f);
   /* Return success */
   lua_pushboolean(L, 1);
   return 1;

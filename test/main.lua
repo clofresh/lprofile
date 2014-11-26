@@ -1,15 +1,29 @@
 LProfile = require('lprofile')
 
-function test()
-    print('running function')
+function a()
+    print('running a')
+    b()
+    c()
+    c()
+end
+
+function b()
+    print('running b')
+    love.timer.sleep(2)
+end
+
+function c()
+    print('running c')
+    b()
 end
 
 function love.load()
     print('starting')
     LProfile.start()
     print('started')
-    test()
+    a()
     print('stopping')
     LProfile.stop()
+    love.event.quit()
 end
 

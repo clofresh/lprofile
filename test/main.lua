@@ -9,7 +9,7 @@ end
 
 function b()
     print('running b')
-    love.timer.sleep(2)
+    love.timer.sleep(0.5)
 end
 
 function c()

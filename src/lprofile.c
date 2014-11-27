@@ -8,8 +8,10 @@
 const char* C_SOURCE = "=[C]";
 
 typedef struct scall {
-  clock_t start_time;
-  clock_t end_time;
+  clock_t incl_start_time;
+  clock_t incl_end_time;
+  clock_t excl_start_time;
+  int excl_duration;
   const char *caller_source;
   const char *caller_name;
   int caller_linedefined;
@@ -33,12 +35,20 @@ int size_call_stack;
 static void callhook(lua_State *L, lua_Debug *ar) {
   int call_index;
   int call_stack_index;
-
+  clock_t now = clock();
 
   if (!ar->event) {
     lua_getinfo(L, "nS", ar);
     /* Entering a function */
     CALL call;
+    CALL *prev_top = NULL;
+    if (num_call_stack > 0) {
+      prev_top = &calls[call_stack[num_call_stack - 1]];
+      if (prev_top->excl_start_time != 0) {
+        prev_top->excl_duration += now - prev_top->excl_start_time;
+        prev_top->excl_start_time = 0;
+      }
+    }
 
     /* Get info on the caller of this function */
     lua_Debug previous_ar;
@@ -49,16 +59,34 @@ static void callhook(lua_State *L, lua_Debug *ar) {
       call.line = -1;
     } else {
       lua_getinfo(L, "nSl", &previous_ar);
-      call.caller_name = previous_ar.name;
-      call.caller_source = previous_ar.source;
+      if (previous_ar.name == NULL) {
+        call.caller_name = "(null)";
+      } else {
+        call.caller_name = previous_ar.name;
+      }
+      if (previous_ar.source == NULL) {
+        call.caller_source = "(null)";
+      } else {
+        call.caller_source = previous_ar.source;
+      }
       call.caller_linedefined = previous_ar.linedefined;
       call.line = previous_ar.currentline;
     }
 
     /* Populate the call info */
-    call.start_time = clock();
-    call.source = ar->source;
-    call.name = ar->name;
+    call.incl_start_time = now;
+    call.incl_end_time = 0;
+    call.excl_start_time = now;
+    if (ar->source == NULL) {
+      call.source = "(null)";
+    } else {
+      call.source = ar->source;
+    }
+    if (ar->name == NULL) {
+      call.name = "(null)";
+    } else {
+      call.name = ar->name;
+    }
     call.linedefined = ar->linedefined;
 
     /* Insert the call into the calls array, resizing as needed */
@@ -99,8 +127,13 @@ static void callhook(lua_State *L, lua_Debug *ar) {
     call_stack_index = num_call_stack - 1;
     call_index = call_stack[call_stack_index];
     call = &calls[call_index];
-    call->end_time = clock();
+    call->incl_end_time = now;
     num_call_stack = num_call_stack - 1;
+
+    if (num_call_stack > 0) {
+      call = &calls[call_stack[num_call_stack - 1]];
+      call->excl_start_time = now;
+    }
   }
 
 }
@@ -137,9 +170,31 @@ static int profiler_start(lua_State *L) {
   return 1;
 }
 
+static int cmpcalls(const void *p1, const void *p2) {
+  int cmp;
+  CALL *c1 = (CALL *)p1;
+  CALL *c2 = (CALL *)p2;
+  cmp = strcmp(c1->caller_name, c2->caller_name);
+  if (cmp == 0) {
+    cmp = strcmp(c1->caller_source, c2->caller_source);
+    if (cmp == 0) {
+      cmp = strcmp(c1->source, c2->source);
+      if (cmp == 0) {
+        cmp = strcmp(c1->name, c2->name);
+      }
+    }
+  }
+  return cmp;
+}
+
 static int profiler_stop(lua_State *L) {
+
   CALL *call;
-  int duration;
+  int incl_duration, count, linedefined, line;
+  const char *caller_source = NULL;
+  const char *caller_name = NULL;
+  const char *source = NULL;
+  const char *name = NULL;
 
   /* Deregister the callhook */
   lua_sethook(L, (lua_Hook)callhook, 0, 0);
@@ -148,27 +203,80 @@ static int profiler_stop(lua_State *L) {
   free(call_stack);
 
   /* Output the calls */
+  qsort(calls, num_calls, sizeof(CALL), cmpcalls);
+
   fprintf(f, "events: Time\n\n");
   for (int i = 0; i < num_calls; i ++) {
     call = &calls[i];
-    if (call->end_time) {
-      duration = (int)(call->end_time - call->start_time);
-    } else {
-      duration = 0;
-    }
 
-    fprintf(f, "fl=%s\nfn=%s\n%d %d\ncfi=%s\ncfn=%s\ncalls=%d %d\n%d %d\n\n",
-      call->caller_source,
-      call->caller_name,
-      call->line,
-      0, /* exclusive duration */
-      call->source,
-      call->name,
-      1, /* number of times called */
-      call->linedefined,
-      call->line,
-      duration);
+    if (caller_source == NULL || caller_name == NULL || source == NULL || name == NULL) {
+
+      caller_source = call->caller_source;
+      caller_name = call->caller_name;
+      source = call->source;
+      name = call->name;
+      linedefined = call->linedefined;
+      line = call->line;
+      incl_duration = 0;
+      count = 0;
+
+      fprintf(f, "\nfl=%s\nfn=%s\n", caller_source, caller_name);
+
+    } else if (strcmp(caller_source, call->caller_source) != 0 || strcmp(caller_name, call->caller_name) != 0) {
+
+      fprintf(f, "cfi=%s\ncfn=%s\ncalls=%d %d\n%d %d\n",
+        source,
+        name,
+        count,
+        linedefined,
+        line,
+        incl_duration);
+
+      caller_source = call->caller_source;
+      caller_name = call->caller_name;
+      source = call->source;
+      name = call->name;
+      linedefined = call->linedefined;
+      line = call->line;
+      incl_duration = 0;
+      count = 0;
+
+      fprintf(f, "\nfl=%s\nfn=%s\n", caller_source, caller_name);
+
+    } else if (strcmp(source, call->source) != 0 || strcmp(name, call->name) != 0) {
+
+      fprintf(f, "cfi=%s\ncfn=%s\ncalls=%d %d\n%d %d\n",
+        source,
+        name,
+        count,
+        linedefined,
+        line,
+        incl_duration);
+
+      source = call->source;
+      name = call->name;
+      linedefined = call->linedefined;
+      line = call->line;
+      incl_duration = 0;
+      count = 0;
+    }
+    fprintf(f, "%d %d\n", call->line, call->excl_duration);
+
+    if (call->incl_end_time != 0) {
+      incl_duration += (int)(call->incl_end_time - call->incl_start_time);
+    }
+    count += 1;
   }
+  if (source != NULL && name != NULL) {
+    fprintf(f, "cfi=%s\ncfn=%s\ncalls=%d %d\n%d %d\n",
+    source,
+    name,
+    count,
+    linedefined,
+    line,
+    incl_duration);
+  }
+
   free(calls);
 
   fclose(f);
